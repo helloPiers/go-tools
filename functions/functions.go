@@ -97,7 +97,6 @@ func (d *Descriptions) Get(fn *ssa.Function) Description {
 			fd.result.Ranges = vrp.BuildGraph(fn).Solve()
 			fd.result.Loops = findLoops(fn)
 			fd.result.NilError = fd.result.NilError || IsNilError(fn)
-			fd.result.ConcreteReturnTypes = concreteReturnTypes(fn)
 		}
 
 		close(fd.ready)

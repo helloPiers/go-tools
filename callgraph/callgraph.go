@@ -78,8 +78,13 @@ func (g *Graph) CreateNode(fn *ssa.Function) *Node {
 type Node struct {
 	Func *ssa.Function // the function this node represents
 	ID   int           // 0-based sequence number
-	In   []*Edge       // unordered set of incoming call edges (n.In[*].Callee == n)
-	Out  []*Edge       // unordered set of outgoing call edges (n.Out[*].Caller == n)
+	SCC  int
+	In   []*Edge // unordered set of incoming call edges (n.In[*].Callee == n)
+	Out  []*Edge // unordered set of outgoing call edges (n.Out[*].Caller == n)
+
+	index   int
+	lowlink int
+	stack   bool
 }
 
 func (n *Node) String() string {
