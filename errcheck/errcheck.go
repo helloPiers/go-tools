@@ -23,8 +23,6 @@ import (
 
 // TODO a common case of unhelpful positive is calls to os.Remove in
 // unit tests, when cleaning up temporary files.
-//
-// Another case: function calls in benchmarks
 
 // TODO functions taking callbacks that only return an error if the
 // callback does
@@ -214,6 +212,10 @@ func (c *Checker) CheckErrors(j *lint.Job) {
 	}
 
 	for _, fn := range j.Program.InitialFunctions {
+		if IsInTest(j, fn) && strings.HasPrefix(fn.Name(), "Benchmark") {
+			// Don't flag errors in benchmarks
+			continue
+		}
 		node := c.db.PTA.CallGraph.Nodes[fn]
 		if node == nil {
 			// Function isn't in the call graph. Dead function?
