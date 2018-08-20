@@ -14,3 +14,8 @@ func BenchmarkFoo(b *testing.B) {
 	f, _ := os.Create("")
 	f.Close()
 }
+
+func ExampleFoo() {
+	f, _ := os.Create("")
+	f.Close()
+}

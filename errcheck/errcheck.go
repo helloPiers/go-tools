@@ -28,10 +28,11 @@ import (
 // callback does
 
 // TODO methods on *tabwriter.Writer
-
 // TODO WriteTo
-
 // TODO io.WriteString
+// TODO io.Copy, io.CopyN
+// TODO calls to bufio.Writer.Flush within the bufio package, since
+//   that code checks b.err
 
 type FuncDesc struct {
 	ReturnsOnlyNilError bool
@@ -212,7 +213,7 @@ func (c *Checker) CheckErrors(j *lint.Job) {
 	}
 
 	for _, fn := range j.Program.InitialFunctions {
-		if IsInTest(j, fn) && strings.HasPrefix(fn.Name(), "Benchmark") {
+		if IsInTest(j, fn) && (strings.HasPrefix(fn.Name(), "Benchmark") || strings.HasPrefix(fn.Name(), "Example")) {
 			// Don't flag errors in benchmarks
 			continue
 		}
