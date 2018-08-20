@@ -32,5 +32,5 @@ func fmtprint() {
 
 	// make sure we're not just ignoring all errors
 	f, _ := os.Create("")
-	fmt.Fprint(f) // MATCH "unchecked error"
+	fmt.Fprint(f) // MATCH "require checking"
 }

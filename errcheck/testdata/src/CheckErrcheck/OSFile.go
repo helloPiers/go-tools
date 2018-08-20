@@ -6,7 +6,7 @@ import (
 )
 
 func file1(c io.Closer) { c.Close() }
-func file2(c io.Closer) { c.Close() } // MATCH "unchecked error"
+func file2(c io.Closer) { c.Close() } // MATCH "require checking"
 func file3(c io.Closer) { c.Close() } // MATCH /write-enabled.+OSFile.go:37/
 func file4(c io.Closer) { c.Close() }
 func file5(c io.Closer) { c.Close() } // MATCH /write-enabled.+OSFile.go:45/
@@ -30,7 +30,7 @@ func osfile() {
 
 	// Closing write-enabled files should get flagged
 	c2, _ := os.Create("")
-	c2.Close() // MATCH "unchecked error"
+	c2.Close() // MATCH "require checking"
 
 	// Same as before, but going through functions and interfaces
 	c3, _ := os.Open("")

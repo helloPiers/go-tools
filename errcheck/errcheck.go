@@ -263,7 +263,7 @@ func (c *Checker) CheckErrors(j *lint.Job) {
 		}
 
 		for call, reasons := range unchecked {
-			s := "unchecked error"
+			s := "make sure the error returned by this function doesn't require checking"
 			if len(reasons) > 0 {
 				s += "\n\t" + strings.Join(reasons, "\n\t")
 			}
