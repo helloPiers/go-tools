@@ -34,15 +34,6 @@ import (
 // TODO calls to bufio.Writer.Flush within the bufio package, since
 //   that code checks b.err
 
-type FuncDesc struct {
-	ReturnsOnlyNilError bool
-}
-
-type Func struct {
-	Params  []*pointer.Pointer
-	Results [][]*pointer.Pointer
-}
-
 type Checker struct {
 	db *Knowledge
 }
@@ -64,23 +55,9 @@ func (c *Checker) Funcs() map[string]lint.Func {
 	}
 }
 
-type callT struct {
-	call ssa.CallInstruction
-	recv *pointer.Pointer
-	ret  *pointer.Pointer
-	fn   *pointer.Pointer
-	args []*pointer.Pointer
-}
+func ignoreFprint(db *Knowledge, call *callgraph.Edge) (bool, []string) {
+	arg0 := db.PTA.Node(call.Site.Common().Args[0])
 
-func mustAddExtendedQuery(cfg *pointer.Config, val ssa.Value, query string) *pointer.Pointer {
-	p, err := cfg.AddExtendedQuery(val, query)
-	if err != nil {
-		panic(err)
-	}
-	return p
-}
-
-func ignoreFprint(db *Knowledge, arg0 *pointer.Pointer) (bool, []string) {
 	for _, l := range arg0.PointsTo().Labels() {
 	tracedLoop:
 		for _, c := range trace(db.PTA.CallGraph, l.Value()) {
@@ -98,10 +75,8 @@ func ignoreFprint(db *Knowledge, arg0 *pointer.Pointer) (bool, []string) {
 				for i := 0; i < n; i++ {
 					if meth := T.Method(i); meth.Name() == "Write" {
 						fn := db.Prog.SSA.FuncValue(meth)
-						for _, res := range db.Funcs[fn].Results {
-							if res[1].DynamicTypes().Len() == 0 {
-								continue tracedLoop
-							}
+						if db.PTA.Node(fn).(pointer.Func).Results().At(1).DynamicTypes().Len() == 0 {
+							continue tracedLoop
 						}
 					}
 				}
@@ -114,9 +89,9 @@ func ignoreFprint(db *Knowledge, arg0 *pointer.Pointer) (bool, []string) {
 	return true, nil
 }
 
-func drop(db *Knowledge, call *callgraph.Edge, meta callT) (bool, []string) { return true, nil }
+func drop(db *Knowledge, call *callgraph.Edge) (bool, []string) { return true, nil }
 
-var handlers = map[string]func(db *Knowledge, call *callgraph.Edge, meta callT) (bool, []string){
+var handlers = map[string]func(db *Knowledge, call *callgraph.Edge) (bool, []string){
 	// Nobody cares about resp.Body.Close errors
 	"(*net/http.cancelTimerBody).Close": drop,
 	"(*net/http.http2gzipReader).Close": drop,
@@ -130,15 +105,9 @@ var handlers = map[string]func(db *Knowledge, call *callgraph.Edge, meta callT) 
 	"fmt.Println": drop,
 
 	// Writing to certain destinations either doesn't produce errors, or is irrelevant (stdout, stderr)
-	"fmt.Fprint": func(db *Knowledge, call *callgraph.Edge, meta callT) (bool, []string) {
-		return ignoreFprint(db, meta.args[0])
-	},
-	"fmt.Fprintf": func(db *Knowledge, call *callgraph.Edge, meta callT) (bool, []string) {
-		return ignoreFprint(db, meta.args[0])
-	},
-	"fmt.Fprintln": func(db *Knowledge, call *callgraph.Edge, meta callT) (bool, []string) {
-		return ignoreFprint(db, meta.args[0])
-	},
+	"fmt.Fprint":   ignoreFprint,
+	"fmt.Fprintf":  ignoreFprint,
+	"fmt.Fprintln": ignoreFprint,
 
 	// A common usage pattern is to ignore the Write errors and
 	// only check the error of Flush, because Flush returns any
@@ -146,12 +115,17 @@ var handlers = map[string]func(db *Knowledge, call *callgraph.Edge, meta callT) 
 	"(*bufio.Writer).Write": drop,
 
 	// closing read-only files doesn't produce useful errors
-	"(*os.File).Close": func(db *Knowledge, call *callgraph.Edge, meta callT) (bool, []string) {
+	"(*os.File).Close": func(db *Knowledge, call *callgraph.Edge) (bool, []string) {
 		openedReadOnly := func(c ssa.Value) bool {
 			var call *ssa.Call
 			switch c := c.(type) {
 			case *ssa.Extract:
-				call = c.Tuple.(*ssa.Call)
+				var ok bool
+				call, ok = c.Tuple.(*ssa.Call)
+				if !ok {
+					// TODO(dh): support this case
+					return false
+				}
 			case *ssa.Call:
 				call = c
 			default:
@@ -183,7 +157,7 @@ var handlers = map[string]func(db *Knowledge, call *callgraph.Edge, meta callT) 
 		// by whoever calls the handler, not the handler itself.
 		if call.Site.Common().IsInvoke() {
 			// interface method
-			pts := meta.recv.PointsTo()
+			pts := db.PTA.Node(call.Site.Common().Value).PointsTo()
 			for _, l := range pts.Labels() {
 				x := l.Value().(*ssa.MakeInterface).X
 				if IsType(x.Type(), "*os.File") {
@@ -226,26 +200,38 @@ func (c *Checker) CheckErrors(j *lint.Job) {
 		unchecked := map[ssa.CallInstruction][]string{}
 
 		for _, call := range node.Out {
-			meta, ok := c.db.Calls[call.Site]
-			if !ok {
-				// Not a call we care about
+			sig := call.Callee.Func.Signature
+			if n := sig.Results().Len(); n == 0 || !IsType(sig.Results().At(n-1).Type(), "error") {
 				continue
 			}
-			if meta.ret != nil && meta.ret.DynamicTypes().Len() == 0 {
-				// PTA has determined that the return value is always nil.
-				// Don't bother with our custom logic.
-				continue
-			}
-			any := false
-			for _, res := range c.db.Funcs[call.Callee.Func].Results {
-				if len(res[len(res)-1].PointsTo().Labels()) > 0 {
-					any = true
-					break
+			if v, ok := call.Site.(ssa.Value); ok {
+				refs := v.Referrers()
+				if refs == nil || len(FilterDebug(*refs)) > 0 {
+					continue
 				}
-			}
-			if !any {
-				// this method never returns an error
-				continue
+
+				// We check for guaranteed-nil errors in two ways: By
+				// checking the function call's value, as well as the
+				// combined return values of the called function. This
+				// covers context-sensitive calls as well as
+				// individual targets in dynamic calls.
+				results := c.db.PTA.Node(v)
+				res := results
+				if results, ok := results.(pointer.Tuple); ok {
+					res = results.At(results.Len() - 1)
+				}
+				if len(res.PointsTo().Labels()) == 0 {
+					// this call doesn't return an error
+					continue
+				}
+				{
+					results := c.db.PTA.Node(call.Callee.Func).(pointer.Func).Results()
+					res = results.At(results.Len() - 1)
+					if len(res.PointsTo().Labels()) == 0 {
+						// this call doesn't return an error.
+						continue
+					}
+				}
 			}
 
 			name := call.Callee.Func.Object().(*types.Func).FullName()
@@ -258,7 +244,7 @@ func (c *Checker) CheckErrors(j *lint.Job) {
 				unchecked[call.Site] = append(unchecked[call.Site], reasons...)
 				continue
 			}
-			ignore, hReasons := h(c.db, call, meta)
+			ignore, hReasons := h(c.db, call)
 			if !ignore {
 				reasons = append(reasons, hReasons...)
 				unchecked[call.Site] = append(unchecked[call.Site], reasons...)
@@ -318,8 +304,22 @@ func trace(graph *callgraph.Graph, v ssa.Value) []ssa.Value {
 		return []ssa.Value{v}
 	case *ssa.Alloc:
 		return []ssa.Value{v}
+	case *ssa.UnOp:
+		if v.Op != token.MUL {
+			panic(fmt.Sprintf("unsupported token %s (%s)", v.Op, v))
+		}
+		return trace(graph, v.X)
+	case *ssa.FieldAddr:
+		// XXX at this point we need PTA
+		return []ssa.Value{v.X}
+	case *ssa.FreeVar:
+		// XXX use PTA
+		return []ssa.Value{v}
+	case *ssa.Lookup:
+		// XXX use PTA
+		return []ssa.Value{v}
 	default:
-		panic(fmt.Sprintf("unsupported type %T", v))
+		panic(fmt.Sprintf("unsupported type %T (%s)", v, v))
 	}
 }
 
@@ -336,9 +336,7 @@ const (
 type Knowledge struct {
 	Prog *lint.Program
 
-	PTA   *pointer.Result
-	Funcs map[*ssa.Function]Func
-	Calls map[ssa.CallInstruction]callT
+	PTA *pointer.Result
 
 	ReadOnlyOpenFileWrapper map[*ssa.Function]Tristate
 
@@ -363,9 +361,7 @@ func NewKnowledge(prog *lint.Program) *Knowledge {
 	}
 
 	db := &Knowledge{
-		Prog:  prog,
-		Funcs: map[*ssa.Function]Func{},
-		Calls: map[ssa.CallInstruction]callT{},
+		Prog: prog,
 		ReadOnlyOpenFileWrapper: map[*ssa.Function]Tristate{},
 	}
 	db.buildFunctions(mains, prog.AllFunctions)
@@ -478,118 +474,6 @@ func (db *Knowledge) buildFunctions(mains []*ssa.Package, fns []*ssa.Function) {
 	cfg := &pointer.Config{
 		Mains:          mains,
 		BuildCallGraph: true,
-	}
-
-	// OPT(dh): we could save space by not storing functions that have
-	// no pointer args/results. measure.
-	//
-	// OPT(dh): we could delete entries that only have n0.
-	//
-	// OPT(dh): deduplicate Results, cull uninteresting ones
-	for _, fn := range fns {
-		f := Func{
-			Params: make([]*pointer.Pointer, len(fn.Params)),
-		}
-		for i, param := range fn.Params {
-			if pointer.CanPoint(param.Type()) {
-				ptr, err := cfg.AddExtendedQuery(param, "x")
-				if err != nil {
-					panic(err)
-				}
-				f.Params[i] = ptr
-			}
-		}
-		for _, block := range fn.Blocks {
-			for _, ins := range block.Instrs {
-				ret, ok := ins.(*ssa.Return)
-				if !ok {
-					continue
-				}
-				f.Results = append(f.Results, make([]*pointer.Pointer, len(ret.Results)))
-				for i, res := range ret.Results {
-					if pointer.CanPoint(res.Type()) {
-						ptr, err := cfg.AddExtendedQuery(res, "x")
-						if err != nil {
-							panic(err)
-						}
-						f.Results[len(f.Results)-1][i] = ptr
-					}
-				}
-			}
-		}
-		db.Funcs[fn] = f
-	}
-
-	for _, fn := range fns {
-		for _, block := range fn.Blocks {
-			for _, ins := range block.Instrs {
-				call, ok := ins.(ssa.CallInstruction)
-				if !ok {
-					continue
-				}
-
-				// Only check functions that return error as their
-				// last value
-				sig := call.Common().Signature()
-				n := sig.Results().Len()
-				if n == 0 {
-					continue
-				}
-				if !IsType(sig.Results().At(n-1).Type(), "error") {
-					continue
-				}
-
-				if call, ok := call.(*ssa.Call); ok {
-					// Only check functions that discard the error.
-					// Assigning to the blank identifier counts as
-					// handling the error.
-					if call.Referrers() == nil {
-						continue
-					}
-					refs := FilterDebug(*call.Referrers())
-					if len(refs) != 0 {
-						continue
-					}
-				}
-
-				var c callT
-				c.call = call
-				if call.Value() != nil {
-					// This is a normal function call, not a defer or goroutine
-					if n == 1 {
-						c.ret = mustAddExtendedQuery(cfg, call.Value(), "x")
-					} else {
-						c.ret = mustAddExtendedQuery(cfg, call.Value(), fmt.Sprintf("x[%d]", n-1))
-					}
-				}
-
-				if call.Common().IsInvoke() {
-					// interface method call
-					c.recv = mustAddExtendedQuery(cfg, call.Common().Value, "x")
-				} else {
-					switch val := call.Common().Value.(type) {
-					case *ssa.Function:
-						if val.Signature.Recv() != nil {
-							// static method call
-							if pointer.CanPoint(call.Common().Args[0].Type()) {
-								c.recv = mustAddExtendedQuery(cfg, call.Common().Args[0], "x")
-							}
-						}
-					case ssa.Value:
-						// dynamic function value call
-						if pointer.CanPoint(val.Type()) {
-							c.fn = mustAddExtendedQuery(cfg, val, "x")
-						}
-					}
-					for _, arg := range call.Common().Args {
-						if pointer.CanPoint(arg.Type()) {
-							c.args = append(c.args, mustAddExtendedQuery(cfg, arg, "x"))
-						}
-					}
-				}
-				db.Calls[call] = c
-			}
-		}
 	}
 
 	var err error

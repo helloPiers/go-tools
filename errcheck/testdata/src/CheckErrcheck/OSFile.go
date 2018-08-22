@@ -49,4 +49,11 @@ func osfile() {
 	// Same as before, but not using interfaces
 	file6(c5)
 	file7(c6)
+
+	m := map[string]*os.File{}
+	m[""], _ = os.Create("")
+	m[""].Close() // MATCH "require checking"
+	f, ok := m[""]
+	_ = ok
+	f.Close() // MATCH "require checking"
 }

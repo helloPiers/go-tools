@@ -81,7 +81,7 @@ func TestStdlib(t *testing.T) {
 
 	t0 := time.Now()
 
-	result, err := Analyze(config)
+	_, result, err := Analyze(config)
 	if err != nil {
 		t.Fatal(err) // internal error in pointer analysis
 	}

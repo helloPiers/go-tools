@@ -156,6 +156,12 @@ type Value interface {
 	// instead.  NB: it requires that the function was built with
 	// debug information.)
 	Pos() token.Pos
+
+	// For go/pointer
+	Node() uint32
+	Load() uint32
+	SetNode(n uint32)
+	SetLoad(n uint32)
 }
 
 // An Instruction is an SSA instruction that computes a new Value or
@@ -312,6 +318,8 @@ type Function struct {
 	Recover   *BasicBlock   // optional; control transfers here after recovered panic
 	AnonFuncs []*Function   // anonymous functions directly beneath this one
 	referrers []Instruction // referring instructions (iff Parent() != nil)
+	nodeid    uint32
+	loadid    uint32
 
 	// The following fields are set transiently during building,
 	// then cleared.
@@ -378,6 +386,8 @@ type FreeVar struct {
 	pos       token.Pos
 	parent    *Function
 	referrers []Instruction
+	nodeid    uint32
+	loadid    uint32
 
 	// Transiently needed during building.
 	outer Value // the Value captured from the enclosing context.
@@ -392,6 +402,8 @@ type Parameter struct {
 	pos       token.Pos
 	parent    *Function
 	referrers []Instruction
+	nodeid    uint32
+	loadid    uint32
 }
 
 // A Const represents the value of a constant expression.
@@ -416,8 +428,10 @@ type Parameter struct {
 //	3+4i:MyComplex
 //
 type Const struct {
-	typ   types.Type
-	Value exact.Value
+	typ    types.Type
+	Value  exact.Value
+	nodeid uint32
+	loadid uint32
 }
 
 // A Global is a named Value holding the address of a package-level
@@ -431,6 +445,8 @@ type Global struct {
 	object types.Object // a *types.Var; may be nil for synthetics e.g. init$guard
 	typ    types.Type
 	pos    token.Pos
+	nodeid uint32
+	loadid uint32
 
 	Pkg *Package
 }
@@ -455,8 +471,10 @@ type Global struct {
 // signature of the built-in for this call.
 //
 type Builtin struct {
-	name string
-	sig  *types.Signature
+	name   string
+	sig    *types.Signature
+	nodeid uint32
+	loadid uint32
 }
 
 // Value-defining instructions  ----------------------------------------
@@ -1300,6 +1318,9 @@ type register struct {
 	typ       types.Type // type of virtual register
 	pos       token.Pos  // position of source expression, or NoPos
 	referrers []Instruction
+
+	nodeid uint32
+	loadid uint32
 }
 
 // anInstruction is a mix-in embedded by all Instructions.
@@ -1495,6 +1516,10 @@ func (v *register) setNum(num int)            { v.num = num }
 func (v *register) Referrers() *[]Instruction { return &v.referrers }
 func (v *register) Pos() token.Pos            { return v.pos }
 func (v *register) setPos(pos token.Pos)      { v.pos = pos }
+func (v *register) Node() uint32              { return v.nodeid }
+func (v *register) Load() uint32              { return v.loadid }
+func (v *register) SetNode(n uint32)          { v.nodeid = n }
+func (v *register) SetLoad(n uint32)          { v.loadid = n }
 
 func (v *anInstruction) Parent() *Function          { return v.block.parent }
 func (v *anInstruction) Block() *BasicBlock         { return v.block }
@@ -1743,3 +1768,31 @@ func (v *Const) Operands(rands []*Value) []*Value     { return rands }
 func (v *Function) Operands(rands []*Value) []*Value  { return rands }
 func (v *Global) Operands(rands []*Value) []*Value    { return rands }
 func (v *Parameter) Operands(rands []*Value) []*Value { return rands }
+
+func (v *Builtin) SetNode(n uint32)   { v.nodeid = n }
+func (v *FreeVar) SetNode(n uint32)   { v.nodeid = n }
+func (v *Const) SetNode(n uint32)     { v.nodeid = n }
+func (v *Function) SetNode(n uint32)  { v.nodeid = n }
+func (v *Global) SetNode(n uint32)    { v.nodeid = n }
+func (v *Parameter) SetNode(n uint32) { v.nodeid = n }
+
+func (v *Builtin) Node() uint32   { return v.nodeid }
+func (v *FreeVar) Node() uint32   { return v.nodeid }
+func (v *Const) Node() uint32     { return v.nodeid }
+func (v *Function) Node() uint32  { return v.nodeid }
+func (v *Global) Node() uint32    { return v.nodeid }
+func (v *Parameter) Node() uint32 { return v.nodeid }
+
+func (v *Builtin) Load() uint32   { return v.loadid }
+func (v *FreeVar) Load() uint32   { return v.loadid }
+func (v *Const) Load() uint32     { return v.loadid }
+func (v *Function) Load() uint32  { return v.loadid }
+func (v *Global) Load() uint32    { return v.loadid }
+func (v *Parameter) Load() uint32 { return v.loadid }
+
+func (v *Builtin) SetLoad(n uint32)   { v.loadid = n }
+func (v *FreeVar) SetLoad(n uint32)   { v.loadid = n }
+func (v *Const) SetLoad(n uint32)     { v.loadid = n }
+func (v *Function) SetLoad(n uint32)  { v.loadid = n }
+func (v *Global) SetLoad(n uint32)    { v.loadid = n }
+func (v *Parameter) SetLoad(n uint32) { v.loadid = n }

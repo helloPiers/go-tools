@@ -227,7 +227,7 @@ type onode struct {
 }
 
 type offsetAddr struct {
-	ptr    nodeid
+	ptr    NodeID
 	offset uint32
 }
 
@@ -443,10 +443,10 @@ func (c *invokeConstraint) presolve(h *hvn) {
 	h.markIndirect(onodeid(c.params), "invoke targets node")
 	id++
 
-	id += nodeid(h.a.sizeof(sig.Params()))
+	id += NodeID(h.a.sizeof(sig.Params()))
 
 	// Mark the caller's R-block as indirect.
-	end := id + nodeid(h.a.sizeof(sig.Results()))
+	end := id + NodeID(h.a.sizeof(sig.Results()))
 	for id < end {
 		h.markIndirect(onodeid(id), "invoke R-block")
 		id++
@@ -485,7 +485,7 @@ func (h *hvn) markIndirectNodes() {
 	for _, c := range h.a.constraints {
 		if c, ok := c.(*addrConstraint); ok {
 			start := h.a.enclosingObj(c.src)
-			end := start + nodeid(h.a.nodes[start].obj.size)
+			end := start + NodeID(h.a.nodes[start].obj.size)
 			for id := c.src; id < end; id++ {
 				h.markIndirect(onodeid(id), "A-T object")
 			}
@@ -765,16 +765,16 @@ func (h *hvn) coalesce(x, y onodeid) {
 //
 func (h *hvn) simplify() {
 	// canon maps each peLabel to its canonical main node.
-	canon := make([]nodeid, h.label)
+	canon := make([]NodeID, h.label)
 	for i := range canon {
-		canon[i] = nodeid(h.N) // indicates "unset"
+		canon[i] = NodeID(h.N) // indicates "unset"
 	}
 
 	// mapping maps each main node index to the index of the canonical node.
-	mapping := make([]nodeid, len(h.a.nodes))
+	mapping := make([]NodeID, len(h.a.nodes))
 
 	for id := range h.a.nodes {
-		id := nodeid(id)
+		id := NodeID(id)
 		if id == 0 {
 			canon[0] = 0
 			mapping[0] = 0
@@ -786,7 +786,7 @@ func (h *hvn) simplify() {
 		label := peLabel(peLabels.Min())
 
 		canonId := canon[label]
-		if canonId == nodeid(h.N) {
+		if canonId == NodeID(h.N) {
 			// id becomes the representative of the PE label.
 			canonId = id
 			canon[label] = canonId
@@ -922,7 +922,7 @@ func (h *hvn) simplify() {
 			// some constraints still have an effect if one
 			// of the operands is zero: rVCall, rVMapIndex,
 			// rvSetMapIndex.  Handle them specially.
-			rtNodeid := reflect.TypeOf(nodeid(0))
+			rtNodeid := reflect.TypeOf(NodeID(0))
 			x := reflect.ValueOf(c).Elem()
 			for i, nf := 0, x.NumField(); i < nf; i++ {
 				f := x.Field(i)

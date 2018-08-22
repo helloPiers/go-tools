@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"os"
@@ -25,10 +24,6 @@ func fmtprint() {
 
 	// ... not even on custom types
 	fmt.Fprint(alwaysWriter{}, "")
-
-	// ... and people handle bufio.Writer errors when calling Flush
-	bw := bufio.NewWriter(nil)
-	fmt.Fprint(bw)
 
 	// make sure we're not just ignoring all errors
 	f, _ := os.Create("")

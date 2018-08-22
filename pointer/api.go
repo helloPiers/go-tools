@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/token"
+	"go/types"
 	"io"
 
 	"golang.org/x/tools/container/intsets"
@@ -61,7 +62,6 @@ type Config struct {
 	// populate a map[*ssa.DebugRef]Pointer in the Result, one
 	// entry per source expression.
 	//
-	Queries         map[ssa.Value]struct{}
 	IndirectQueries map[ssa.Value]struct{}
 	extendedQueries map[ssa.Value][]*extendedQuery
 
@@ -80,18 +80,6 @@ const (
 
 	trackAll = ^track(0)
 )
-
-// AddQuery adds v to Config.Queries.
-// Precondition: CanPoint(v.Type()).
-func (c *Config) AddQuery(v ssa.Value) {
-	if !CanPoint(v.Type()) {
-		panic(fmt.Sprintf("%s is not a pointer-like value: %s", v, v.Type()))
-	}
-	if c.Queries == nil {
-		c.Queries = make(map[ssa.Value]struct{})
-	}
-	c.Queries[v] = struct{}{}
-}
 
 // AddQuery adds v to Config.IndirectQueries.
 // Precondition: CanPoint(v.Type().Underlying().(*types.Pointer).Elem()).
@@ -163,9 +151,9 @@ type Warning struct {
 //
 type Result struct {
 	CallGraph       *callgraph.Graph      // discovered call graph
-	Queries         map[ssa.Value]Pointer // pts(v) for each v in Config.Queries.
 	IndirectQueries map[ssa.Value]Pointer // pts(*v) for each v in Config.IndirectQueries.
 	Warnings        []Warning             // warnings of unsoundness
+	analysis        *analysis
 }
 
 // A Pointer is an equivalence class of pointer-like values.
@@ -175,7 +163,7 @@ type Result struct {
 //
 type Pointer struct {
 	a *analysis
-	n nodeid
+	n NodeID
 }
 
 // A PointsToSet is a set of labels (locations or allocations).
@@ -193,7 +181,7 @@ func (s PointsToSet) String() string {
 			if i > 0 {
 				buf.WriteString(", ")
 			}
-			buf.WriteString(s.a.labelFor(nodeid(l)).String())
+			buf.WriteString(s.a.labelFor(NodeID(l)).String())
 		}
 	}
 	buf.WriteByte(']')
@@ -207,7 +195,7 @@ func (s PointsToSet) Labels() []*Label {
 	if s.pts != nil {
 		var space [50]int
 		for _, l := range s.pts.AppendTo(space[:0]) {
-			labels = append(labels, s.a.labelFor(nodeid(l)))
+			labels = append(labels, s.a.labelFor(NodeID(l)))
 		}
 	}
 	return labels
@@ -233,7 +221,7 @@ func (s PointsToSet) DynamicTypes() *typeutil.Map {
 	if s.pts != nil {
 		var space [50]int
 		for _, x := range s.pts.AppendTo(space[:0]) {
-			ifaceObjId := nodeid(x)
+			ifaceObjId := NodeID(x)
 			if !s.a.isTaggedObject(ifaceObjId) {
 				continue // !CanHaveDynamicTypes(tDyn)
 			}
@@ -286,3 +274,100 @@ func (p Pointer) MayAlias(q Pointer) bool {
 func (p Pointer) DynamicTypes() *typeutil.Map {
 	return p.PointsTo().DynamicTypes()
 }
+
+func (r *Result) Load(v ssa.Value) Node {
+	id := NodeID(v.Load())
+
+	switch v := v.(type) {
+	case *ssa.Function:
+		return Func{Pointer{r.analysis, id}, v}
+	case *ssa.Global:
+		return r.analysis.node(id, v.Type().(*types.Pointer).Elem())
+	default:
+		return r.analysis.node(id, v.Type())
+	}
+}
+
+func (r *Result) Node(v ssa.Value) Node {
+	id := NodeID(v.Node())
+
+	switch v := v.(type) {
+	case *ssa.Function:
+		return Func{Pointer{r.analysis, id}, v}
+	case *ssa.Global:
+		return r.analysis.node(id, v.Type().(*types.Pointer).Elem())
+	default:
+		return r.analysis.node(id, v.Type())
+	}
+}
+
+func (a *analysis) node(n NodeID, T types.Type) Node {
+	switch T := T.(type) {
+	case *types.Tuple:
+		return Tuple{Pointer{a, n}, T}
+	case *types.Struct:
+		return nil
+	case *types.Array:
+		return Array{
+			Pointer{a, n},
+			a.node(n+1, T.Elem()),
+		}
+	default:
+		return Ptr{Pointer{a, n}}
+	}
+}
+
+type Node interface {
+	DynamicTypes() *typeutil.Map
+	MayAlias(q Pointer) bool
+	PointsTo() PointsToSet
+}
+
+type Func struct {
+	Pointer
+	fn *ssa.Function
+}
+
+func (fn Func) Args() []Node {
+	out := make([]Node, len(fn.fn.Params))
+	params := fn.a.funcParams(NodeID(fn.fn.Node()))
+	for i, p := range fn.fn.Params {
+		out[i] = fn.a.node(params, p.Type())
+		params += NodeID(fn.a.sizeof(p.Type()))
+	}
+	return out
+}
+
+func (fn Func) Results() Tuple {
+	ptr := Pointer{
+		fn.a,
+		fn.a.funcResults(NodeID(fn.fn.Node())),
+	}
+	t := Tuple{
+		ptr,
+		fn.fn.Signature.Results(),
+	}
+	return t
+}
+
+type Struct struct{ Pointer }
+
+type Tuple struct {
+	Pointer
+	typ *types.Tuple
+}
+
+func (t Tuple) Len() int { return t.typ.Len() }
+func (t Tuple) At(i int) Node {
+	n := t.n + NodeID(t.a.offsetOf(t.typ, i))
+	return t.a.node(n, t.typ.At(i).Type())
+}
+
+type Ptr struct{ Pointer }
+
+type Array struct {
+	Pointer
+	elem Node
+}
+
+func (arr Array) Elem() Node { return arr.elem }

@@ -67,6 +67,9 @@ func testPackages(t *testing.T, c lint.Checker, dir string) {
 
 	versions := map[int][]*packages.Package{}
 	for _, pkg := range pkgs {
+		if pkg.IllTyped {
+			t.Fatalf("package %s is ill-typed", pkg.PkgPath)
+		}
 		path := strings.TrimSuffix(pkg.Types.Path(), ".test")
 		parts := strings.Split(path, "_")
 

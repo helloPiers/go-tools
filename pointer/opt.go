@@ -33,11 +33,11 @@ func (a *analysis) renumber() {
 		fmt.Fprintf(a.log, "\n\n==== Renumbering\n\n")
 	}
 
-	N := nodeid(len(a.nodes))
+	N := NodeID(len(a.nodes))
 	newNodes := make([]*node, N, N)
-	renumbering := make([]nodeid, N, N) // maps old to new
+	renumbering := make([]NodeID, N, N) // maps old to new
 
-	var i, j nodeid
+	var i, j NodeID
 
 	// The zero node is special.
 	newNodes[j] = a.nodes[i]
@@ -53,7 +53,7 @@ func (a *analysis) renumber() {
 			continue
 		}
 
-		end := i + nodeid(obj.size)
+		end := i + NodeID(obj.size)
 		for i < end {
 			newNodes[j] = a.nodes[i]
 			renumbering[i] = j
@@ -67,7 +67,7 @@ func (a *analysis) renumber() {
 	for i = 1; i < N; {
 		obj := a.nodes[i].obj
 		if obj != nil {
-			i += nodeid(obj.size)
+			i += NodeID(obj.size)
 			continue
 		}
 
@@ -94,10 +94,6 @@ func (a *analysis) renumber() {
 	// It is critical that all reachable nodeids are accounted for!
 
 	// Renumber nodeids in queried Pointers.
-	for v, ptr := range a.result.Queries {
-		ptr.n = renumbering[ptr.n]
-		a.result.Queries[v] = ptr
-	}
 	for v, ptr := range a.result.IndirectQueries {
 		ptr.n = renumbering[ptr.n]
 		a.result.IndirectQueries[v] = ptr
@@ -113,6 +109,18 @@ func (a *analysis) renumber() {
 	// Renumber nodeids in global objects.
 	for v, id := range a.globalobj {
 		a.globalobj[v] = renumbering[id]
+	}
+	for v, id := range a.globalval {
+		a.globalval[v] = renumbering[id]
+	}
+
+	for v, ids := range a.allval {
+		a.allval[v] = [2]NodeID{
+			renumbering[ids[0]],
+			renumbering[ids[1]],
+		}
+		v.SetNode(uint32(renumbering[ids[0]]))
+		v.SetLoad(uint32(renumbering[ids[1]]))
 	}
 
 	// Renumber nodeids in constraints.

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"sort"
 
-	"honnef.co/go/tools/callgraph"
 	"golang.org/x/tools/go/loader"
+	"honnef.co/go/tools/callgraph"
 	"honnef.co/go/tools/pointer"
 	"honnef.co/go/tools/ssa"
 	"honnef.co/go/tools/ssa/ssautil"
@@ -80,7 +80,7 @@ func main() {
 	config.AddQuery(Cfm)
 
 	// Run the pointer analysis.
-	result, err := pointer.Analyze(config)
+	_, result, err := pointer.Analyze(config)
 	if err != nil {
 		panic(err) // internal error in pointer analysis
 	}
